@@ -1,0 +1,116 @@
+version: '3.8'
+
+services:
+  # ---------------------------------------------------------
+  # 1. 外部提供的火星模拟器 / Externally provided Mars Simulator
+  # (不可修改 / Cannot be modified)
+  # ---------------------------------------------------------
+  simulator:
+    image: mars-iot-simulator:multiarch_v1  # 确保已导入此镜像 / Ensure this image is loaded via 'docker load'
+    container_name: mars_simulator
+    ports:
+      - "8080:8080"
+    restart: unless-stopped
+
+  # ---------------------------------------------------------
+  # 2. 消息队列 / Message Broker (RabbitMQ)
+  # ---------------------------------------------------------
+  broker:
+    image: rabbitmq:3-management-alpine
+    container_name: rabbitmq_broker
+    ports:
+      - "5672:5672"   # AMQP 通信端口 (后端用) / AMQP protocol port for backend services
+      - "15672:15672" # RabbitMQ 管理后台 (浏览器用) / RabbitMQ Management UI for browsers
+    healthcheck:
+      # 确保队列完全启动后再拉起 Python 服务 / Ensure the broker is fully ready before starting Python services
+      test: rabbitmq-diagnostics -q ping
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ---------------------------------------------------------
+  # 3. 数据摄取服务 / Ingestion Service
+  # ---------------------------------------------------------
+  ingestion-service:
+    build: 
+      context: ./ingestion-service
+      dockerfile: Dockerfile
+    container_name: ingestion_service
+    depends_on:
+      simulator:
+        condition: service_started
+      broker:
+        condition: service_healthy # 等待 RabbitMQ 就绪 / Wait for RabbitMQ to be healthy
+    environment:
+      # 通过环境变量传递内部 URL / Pass internal URLs via environment variables
+      - SIMULATOR_URL=http://simulator:8080
+      - RABBITMQ_URL=amqp://guest:guest@broker:5672/
+    restart: always
+
+  # ---------------------------------------------------------
+  # 4. 自动化规则引擎 / Automation Service (Processing Engine)
+  # ---------------------------------------------------------
+  automation-service:
+    build: 
+      context: ./automation-service
+      dockerfile: Dockerfile
+    container_name: automation_service
+    depends_on:
+      broker:
+        condition: service_healthy
+      simulator:
+        condition: service_started
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@broker:5672/
+      - SIMULATOR_URL=http://simulator:8080
+      - DATABASE_URL=sqlite:////app/data/rules.db  # 指向共享卷 / Point to the shared volume
+    volumes:
+      # 挂载共享数据库卷 / Mount the shared SQLite database volume
+      - shared_sqlite_data:/app/data  
+    restart: always
+
+  # ---------------------------------------------------------
+  # 5. 展示层 API 与 WebSocket / API Service (Backend-for-Frontend)
+  # ---------------------------------------------------------
+  api-service:
+    build: 
+      context: ./api-service
+      dockerfile: Dockerfile
+    container_name: api_service
+    ports:
+      - "8003:8003"  # 暴露给前端 React 调用 / Exposed for the React frontend
+    depends_on:
+      broker:
+        condition: service_healthy
+    environment:
+      - RABBITMQ_URL=amqp://guest:guest@broker:5672/
+      - DATABASE_URL=sqlite:////app/data/rules.db  # 指向共享卷 / Point to the same shared volume
+    volumes:
+      # 挂载共享数据库卷 / Mount the shared SQLite database volume
+      - shared_sqlite_data:/app/data  
+    restart: always
+
+  # ---------------------------------------------------------
+  # 6. 前端看板 / Frontend Dashboard (React)
+  # ---------------------------------------------------------
+  frontend:
+    build: 
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: react_dashboard
+    ports:
+      - "3000:3000"  # 如果 frontend Dockerfile 使用 React dev server, 保持此映射；如用 Nginx, 改为 "3000:80"
+                     # If the frontend Dockerfile uses React dev server, keep this mapping; if using Nginx, change to "3000:80"
+    depends_on:
+      - api-service
+    restart: always
+
+# ---------------------------------------------------------
+# 声明共享的 Docker 数据卷 / Declare shared Docker Volumes
+# ---------------------------------------------------------
+volumes:
+  # 用于在 api-service 和 automation-service 之间共享 SQLite 数据库文件
+  # Used to share the SQLite database file between api-service and automation-service
+  shared_sqlite_data:
+    name: mars_sqlite_volume
