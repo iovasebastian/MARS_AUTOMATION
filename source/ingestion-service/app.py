@@ -12,6 +12,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from typing import Any
 from uuid import uuid4
+from broker import init_rabbitmq, publish_message, close_rabbitmq
 
 SENSOR_API_BASE_URL = "http://localhost:8080/api/sensors"
 POLL_INTERVAL_SECONDS = 5 # poll every 5 seconds
@@ -37,7 +38,7 @@ for topic in topic_list:
     WS_URLs.append(f"ws://localhost:8080/api/telemetry/ws?topic={topic}")
 
 
-def store_event(event: NormalizedEvent) -> None:
+def store_event(event: "NormalizedEvent") -> None:
     latest_events[event.sensor_id] = event
 
 def print_all_events():
@@ -58,8 +59,10 @@ async def poll_sensors() -> None:
                 payload = response.json()
                 normalized_event = normalize_sensor_event(payload)
                 store_event(normalized_event)
-                
-                print_all_events()
+                await publish_message(
+                    routing_key="normalized.sensor",
+                    body=normalized_event.model_dump_json().encode("utf-8"),
+                )   
             except httpx.HTTPStatusError as exc:
                 print(
                     f"[Sensor: {sensor_name}] HTTP error "
@@ -79,6 +82,8 @@ async def lifespan(app: FastAPI):
 
     # --- Startup ---
     _http_client = httpx.AsyncClient()
+
+    await init_rabbitmq()
 
     for WS_URL in WS_URLs:
         asyncio.create_task(websocket_listener(WS_URL))
@@ -112,6 +117,8 @@ async def lifespan(app: FastAPI):
 
     if _http_client is not None:
         await _http_client.aclose()
+
+    await close_rabbitmq()
 
     print("Ingestion service shut down cleanly.")
 
@@ -298,7 +305,10 @@ async def websocket_listener(WS_URL : str):
 
                     normalized_event = normalize_telemetry_event(event_object)
                     store_event(normalized_event)
-                    print_all_events()
+                    await publish_message(
+                        routing_key="normalized.sensor",
+                        body=normalized_event.model_dump_json().encode("utf-8"),
+                    )
         except asyncio.TimeoutError:
             print("No message received in 10 seconds")
         except ConnectionClosedOK:
@@ -307,7 +317,3 @@ async def websocket_listener(WS_URL : str):
         except Exception as e:
             print("Websocket error", e)
             await asyncio.sleep(5)
-
-@app.get("/")
-async def root():
-    return {"status": "Websocket listener working"}
