@@ -4,14 +4,23 @@ const API_BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:8003').repl
 const RULES_KEY = 'mars-rules-local';
 
 const SENSORS = [
-  { id: 'greenhouse_temperature', label: 'greenhouse_temperature', unit: 'C' },
-  { id: 'entrance_humidity', label: 'entrance_humidity', unit: '%' },
-  { id: 'co2_hall', label: 'co2_hall', unit: 'ppm' },
-  { id: 'hydroponic_ph', label: 'hydroponic_ph', unit: 'pH' },
-  { id: 'water_tank_level', label: 'water_tank_level', unit: '%' },
-  { id: 'corridor_pressure', label: 'corridor_pressure', unit: 'kPa' },
-  { id: 'air_quality_pm25', label: 'air_quality_pm25', unit: 'ug/m3' },
-  { id: 'air_quality_voc', label: 'air_quality_voc', unit: 'ppb' }
+  // ── HTTP-polled sensors ──
+  { id: 'greenhouse_temperature', label: 'Greenhouse Temperature', unit: '°C' },
+  { id: 'entrance_humidity', label: 'Entrance Humidity', unit: '%' },
+  { id: 'co2_hall', label: 'CO₂ Hall', unit: 'ppm' },
+  { id: 'hydroponic_ph', label: 'Hydroponic pH', unit: 'pH' },
+  { id: 'water_tank_level', label: 'Water Tank Level', unit: '%' },
+  { id: 'corridor_pressure', label: 'Corridor Pressure', unit: 'kPa' },
+  { id: 'air_quality_pm25', label: 'Air Quality PM2.5', unit: 'µg/m³' },
+  { id: 'air_quality_voc', label: 'Air Quality VOC', unit: 'ppb' },
+  // ── WebSocket telemetry sensors ──
+  { id: 'solar_array', label: 'Solar Array', unit: 'kW' },
+  { id: 'power_bus', label: 'Power Bus', unit: 'kW' },
+  { id: 'power_consumption', label: 'Power Consumption', unit: 'kW' },
+  { id: 'radiation', label: 'Radiation', unit: '' },
+  { id: 'life_support', label: 'Life Support', unit: '' },
+  { id: 'thermal_loop', label: 'Thermal Loop', unit: '°C' },
+  { id: 'airlock', label: 'Airlock', unit: 'cycles/h' },
 ];
 
 const ACTUATORS = ['cooling_fan', 'entrance_humidifier', 'hall_ventilation', 'habitat_heater'];
