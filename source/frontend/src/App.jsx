@@ -252,8 +252,27 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    const stored = localRules.load();
-    setRules(uniqueRules(stored));
+    const loadRules = async () => {
+      try {
+        const data = await request('/rules');
+
+        if (data?.rules) {
+          const normalized = data.rules.map((r) => ({
+            ...r,
+            enabled: true
+          }));
+
+          setRules(uniqueRules(normalized));
+          localRules.save(normalized);
+        }
+      } catch (err) {
+        // fallback to local storage if backend fails
+        const stored = localRules.load();
+        setRules(uniqueRules(stored));
+      }
+    };
+
+    loadRules();
   }, []);
 
   useEffect(() => {
