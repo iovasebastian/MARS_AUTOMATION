@@ -256,9 +256,9 @@ export default function App() {
     setRules(uniqueRules(stored));
   }, []);
 
-  // ---- Actuator polling: fetch on mount + every 5 s ----
+  // ---- Actuator polling: fetch on mount + every second ----
   useEffect(() => {
-    const ACTUATOR_POLL_INTERVAL = 5000;
+    const ACTUATOR_POLL_INTERVAL = 1000;
 
     const fetchActuators = async () => {
       try {
