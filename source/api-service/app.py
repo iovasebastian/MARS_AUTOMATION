@@ -102,8 +102,28 @@ async def new_rule(
 
     return {"status": "rule created"}
 
+@app.get("/rules")
+def get_rules(db: Session = Depends(get_db)):
+    result = db.execute(
+        text("""
+            SELECT id,
+                   sensor_name,
+                   operator,
+                   threshold_value,
+                   actuator_name,
+                   action_state
+            FROM rules
+        """)
+    )
+
+    rows = result.mappings().all()
+
+    return {
+        "rules": rows
+    }
+
 @app.put("/update-rule")
-async def update_rule(rule, db: Session = Depends(get_db)):
+async def update_rule(rule : dict = Body(), db: Session = Depends(get_db)):
     db.execute(
         text("""
             UPDATE rules
@@ -115,12 +135,12 @@ async def update_rule(rule, db: Session = Depends(get_db)):
             WHERE id = :id
         """),
         {
-            "id": rule.id,
-            "sensor_name": rule.sensor_name,
-            "operator": rule.operator,
-            "threshold_value": rule.threshold_value,
-            "actuator_name": rule.actuator_name,
-            "action_state": rule.action_state,
+            "id": rule["id"],
+            "sensor_name": rule["sensor_name"],
+            "operator": rule["operator"],
+            "threshold_value": rule["threshold_value"],
+            "actuator_name": rule["actuator_name"],
+            "action_state": rule["action_state"],
         }
     )
 
