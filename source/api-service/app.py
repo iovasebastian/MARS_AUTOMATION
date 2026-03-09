@@ -10,15 +10,31 @@ from fastapi import Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 
+from fastapi.middleware.cors import CORSMiddleware
+
+origins = [
+    "http://localhost:8000",
+    "http://localhost:8001",
+    "http://localhost:8002",
+    "http://localhost:8003",
+    "http://localhost:3000",
+]
+
 RABBITMQ_URL = os.getenv("RABBITMQ_URL") or "amqp://guest:guest@broker:5672/"
 EXCHANGE_NAME = "normalized_events"
 QUEUE_NAME = "api_service_queue"
 ROUTING_KEY = "normalized.api"
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////app/data/rules.db")
 
-
-
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 connected_clients: list[WebSocket] = []
 latest_events: dict[str, dict] = {}
