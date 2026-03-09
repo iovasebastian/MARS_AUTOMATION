@@ -1,50 +1,30 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
-const API_BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:8000').replace(/\/$/, '');
+const API_BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:8003').replace(/\/$/, '');
 const RULES_KEY = 'mars-rules-local';
 
 const SENSORS = [
   { id: 'greenhouse_temperature', label: 'greenhouse_temperature', unit: 'C' },
   { id: 'entrance_humidity', label: 'entrance_humidity', unit: '%' },
   { id: 'co2_hall', label: 'co2_hall', unit: 'ppm' },
-  { id: 'hydroponic_ph', label: 'hydroponic', unit: 'pH' },
+  { id: 'hydroponic_ph', label: 'hydroponic_ph', unit: 'pH' },
   { id: 'water_tank_level', label: 'water_tank_level', unit: '%' },
   { id: 'corridor_pressure', label: 'corridor_pressure', unit: 'kPa' },
-  { id: 'air_quality_pm25', label: 'air_quality_pm2.5', unit: 'ug/m3' },
+  { id: 'air_quality_pm25', label: 'air_quality_pm25', unit: 'ug/m3' },
   { id: 'air_quality_voc', label: 'air_quality_voc', unit: 'ppb' }
-];
-
-const TOPICS = [
-  'mars/telemetry/solar_array',
-  'mars/telemetry/radiation',
-  'mars/telemetry/life_support',
-  'mars/telemetry/thermal_loop',
-  'mars/telemetry/power_bus',
-  'mars/telemetry/power_consumption',
-  'mars/telemetry/airlock'
 ];
 
 const ACTUATORS = ['cooling_fan', 'entrance_humidifier', 'hall_ventilation', 'habitat_heater'];
 const OPERATORS = ['<', '<=', '=', '>', '>='];
+
 const EMPTY_FORM = {
   id: '',
   sensor_name: 'greenhouse_temperature',
   operator: '>',
-  value: '28',
-  unit: 'C',
+  threshold_value: '28',
   actuator_name: 'cooling_fan',
-  target_state: 'ON',
+  action_state: 'ON',
   enabled: true
-};
-
-const TOPIC_UNIT = {
-  'mars/telemetry/solar_array': 'kW',
-  'mars/telemetry/radiation': 'uSv/h',
-  'mars/telemetry/life_support': '%',
-  'mars/telemetry/thermal_loop': 'C',
-  'mars/telemetry/power_bus': 'kW',
-  'mars/telemetry/power_consumption': 'kW',
-  'mars/telemetry/airlock': 'cycles/h'
 };
 
 const wsUrl = (path) => {
@@ -59,8 +39,16 @@ async function request(path, { method = 'GET', body } = {}) {
     headers: { 'Content-Type': 'application/json' },
     body: body ? JSON.stringify(body) : undefined
   });
-  if (!res.ok) throw new Error(`${method} ${path} -> ${res.status}`);
-  return res.json();
+
+  if (!res.ok) {
+    throw new Error(`${method} ${path} -> ${res.status}`);
+  }
+
+  const contentType = res.headers.get('content-type') || '';
+  if (contentType.includes('application/json')) {
+    return res.json();
+  }
+  return null;
 }
 
 const localRules = {
@@ -74,29 +62,78 @@ const localRules = {
   save: (rules) => localStorage.setItem(RULES_KEY, JSON.stringify(rules))
 };
 
-const ruleBaseSig = (r) => [r.sensor_name, r.operator, Number(r.value), r.actuator_name].join('|');
-const ruleSig = (r) => `${ruleBaseSig(r)}|${r.target_state}`;
-const uniqueRules = (rules) => Array.from(new Map(rules.map((r) => [ruleSig(r), r])).values());
+const ruleBaseSig = (r) =>
+  [r.sensor_name, r.operator, Number(r.threshold_value), r.actuator_name].join('|');
 
-const sensorText = (d) => {
-  if (!d) return '-';
-  if (typeof d.value === 'number') return `${d.value} ${d.unit || ''}`.trim();
-  if (typeof d.level_pct === 'number') return `${d.level_pct}%`;
-  if (typeof d.pm25_ug_m3 === 'number') return `${d.pm25_ug_m3} ug/m3`;
-  if (Array.isArray(d.measurements)) return d.measurements.map((m) => `${m.metric}:${m.value}${m.unit ? ` ${m.unit}` : ''}`).join(' | ');
+const ruleSig = (r) =>
+  `${ruleBaseSig(r)}|${r.action_state}`;
+
+const uniqueRules = (rules) =>
+  Array.from(new Map(rules.map((r) => [String(r.id), r])).values());
+
+const getEventNumericValue = (event) => {
+  if (!event) return null;
+
+  if (typeof event.value === 'number') return event.value;
+  if (typeof event.level_pct === 'number') return event.level_pct;
+  if (typeof event.pm25_ug_m3 === 'number') return event.pm25_ug_m3;
+  if (typeof event.temperature_c === 'number') return event.temperature_c;
+  if (typeof event.cycles_per_hour === 'number') return event.cycles_per_hour;
+  if (typeof event.power_kw === 'number') return event.power_kw;
+
+  if (Array.isArray(event.measurements) && event.measurements.length > 0) {
+    const firstNumeric = event.measurements.find((m) => typeof m.value === 'number');
+    return firstNumeric?.value ?? null;
+  }
+
+  return null;
+};
+
+const sensorText = (event) => {
+  if (!event) return '-';
+
+  if (typeof event.value === 'number') {
+    return `${event.value} ${event.unit || ''}`.trim();
+  }
+
+  if (typeof event.level_pct === 'number') {
+    return `${event.level_pct}%`;
+  }
+
+  if (typeof event.pm25_ug_m3 === 'number') {
+    return `${event.pm25_ug_m3} ug/m3`;
+  }
+
+  if (typeof event.temperature_c === 'number') {
+    return `${event.temperature_c} C`;
+  }
+
+  if (typeof event.cycles_per_hour === 'number') {
+    return `${event.cycles_per_hour} cycles/h`;
+  }
+
+  if (typeof event.power_kw === 'number') {
+    return `${event.power_kw} kW`;
+  }
+
+  if (Array.isArray(event.measurements)) {
+    return event.measurements
+      .map((m) => `${m.metric}:${m.value}${m.unit ? ` ${m.unit}` : ''}`)
+      .join(' | ');
+  }
+
   return '-';
 };
 
-const topicValue = (topic, d) => {
-  if (!d) return null;
-  if (topic.includes('radiation') || topic.includes('life_support')) return d.measurements?.[0]?.value ?? null;
-  if (topic.includes('thermal_loop')) return d.temperature_c ?? null;
-  if (topic.includes('airlock')) return d.cycles_per_hour ?? null;
-  return d.power_kw ?? null;
-};
-
 function MiniChart({ title, unit, points }) {
-  if (!points.length) return <div className="chart-panel"><h4>{title}</h4><div className="empty">Waiting for data...</div></div>;
+  if (!points.length) {
+    return (
+      <div className="chart-panel">
+        <h4>{title}</h4>
+        <div className="empty">Waiting for data...</div>
+      </div>
+    );
+  }
 
   const w = 430;
   const h = 220;
@@ -105,12 +142,16 @@ function MiniChart({ title, unit, points }) {
   const min = Math.min(...vals);
   const max = Math.max(...vals);
   const range = max - min || 1;
+
   const pts = points.map((p, i) => ({
     ...p,
     x: pad + (i / Math.max(points.length - 1, 1)) * (w - pad * 2),
     y: h - pad - ((p.value - min) / range) * (h - pad * 2)
   }));
-  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+
+  const d = pts
+    .map((p, i) => `${i ? 'L' : 'M'}${p.x.toFixed(1)},${p.y.toFixed(1)}`)
+    .join(' ');
 
   return (
     <div className="chart-panel">
@@ -123,11 +164,17 @@ function MiniChart({ title, unit, points }) {
         {pts.map((p, i) => (
           <g key={i}>
             <circle cx={p.x} cy={p.y} r="3" className="point" />
-            <text x={p.x} y={p.y - 8} textAnchor="middle" className="point-label">{p.value.toFixed(2)}</text>
+            <text x={p.x} y={p.y - 8} textAnchor="middle" className="point-label">
+              {p.value.toFixed(2)}
+            </text>
           </g>
         ))}
-        <text x="8" y="14" className="meta">min: {min.toFixed(2)} {unit}</text>
-        <text x="8" y={h - 8} className="meta">max: {max.toFixed(2)} {unit}</text>
+        <text x="8" y="14" className="meta">
+          min: {min.toFixed(2)} {unit}
+        </text>
+        <text x="8" y={h - 8} className="meta">
+          max: {max.toFixed(2)} {unit}
+        </text>
       </svg>
     </div>
   );
@@ -135,140 +182,244 @@ function MiniChart({ title, unit, points }) {
 
 export default function App() {
   const [page, setPage] = useState('operations');
-  const [sensors, setSensors] = useState({});
-  const [actuators, setActuators] = useState({});
-  const [latest, setLatest] = useState({});
-  const [series, setSeries] = useState(Object.fromEntries(TOPICS.map((t) => [t, []])));
+  const [latestEvents, setLatestEvents] = useState({});
+  const [series, setSeries] = useState(
+    Object.fromEntries(SENSORS.map((s) => [s.id, []]))
+  );
+  const [actuators, setActuators] = useState(
+    Object.fromEntries(ACTUATORS.map((a) => [a, 'OFF']))
+  );
   const [rules, setRules] = useState([]);
-  const [remoteRules, setRemoteRules] = useState(true);
   const [form, setForm] = useState(EMPTY_FORM);
-  const [dialog, setDialog] = useState({ open: false, mode: 'info', message: '', ruleId: '' });
+  const [dialog, setDialog] = useState({
+    open: false,
+    mode: 'info',
+    message: '',
+    ruleId: ''
+  });
 
   const canEdit = Boolean(form.id);
 
-  const closeDialog = () => setDialog({ open: false, mode: 'info', message: '', ruleId: '' });
-  const showInfo = (message) => setDialog({ open: true, mode: 'info', message, ruleId: '' });
-  const confirmDelete = (ruleId) => setDialog({ open: true, mode: 'confirm', message: 'Are you sure you want to delete this rule?', ruleId });
+  const sensorMap = useMemo(
+    () => Object.fromEntries(SENSORS.map((s) => [s.id, s])),
+    []
+  );
 
-  const loadSensors = async () => {
-    const rows = await Promise.all(SENSORS.map(async (s) => {
-      try {
-        return [s.id, await request(`/api/sensors/${s.id}`)];
-      } catch {
-        return [s.id, { status: 'unavailable' }];
-      }
-    }));
-    setSensors(Object.fromEntries(rows));
-  };
+  const closeDialog = () =>
+    setDialog({ open: false, mode: 'info', message: '', ruleId: '' });
 
-  const loadActuators = async () => {
-    const data = await request('/api/actuators');
-    setActuators(data.actuators || {});
-  };
+  const showInfo = (message) =>
+    setDialog({ open: true, mode: 'info', message, ruleId: '' });
 
-  useEffect(() => {
-    loadSensors().catch(() => { });
-    loadActuators().catch(() => { });
-
-    const conns = TOPICS.map((topic) => {
-      const ws = new WebSocket(wsUrl(`/api/telemetry/ws?topic=${encodeURIComponent(topic)}`));
-      ws.onmessage = (e) => {
-        try {
-          setLatest((prev) => ({ ...prev, [topic]: JSON.parse(e.data) }));
-        } catch {
-          // ignore malformed telemetry messages
-        }
-      };
-      return ws;
+  const confirmDelete = (ruleId) =>
+    setDialog({
+      open: true,
+      mode: 'confirm',
+      message: 'Are you sure you want to delete this rule?',
+      ruleId
     });
 
-    return () => conns.forEach((x) => x.close());
-  }, []);
-
   useEffect(() => {
-    const timer = setInterval(() => {
-      loadSensors().catch(() => { });
-      setSeries((prev) => {
-        const next = { ...prev };
-        for (const topic of TOPICS) {
-          const value = topicValue(topic, latest[topic]);
-          if (typeof value === 'number') next[topic] = [...(next[topic] || []), { ts: Date.now(), value }].slice(-20);
-        }
-        return next;
-      });
-    }, 5000);
-    return () => clearInterval(timer);
-  }, [latest]);
-
-  useEffect(() => {
-    const loadRules = async () => {
+    const loadInitialLatest = async () => {
       try {
-        const data = await request('/api/rules');  //Backend rule interface is available ->remoteRules==true
-        setRules(uniqueRules(data.rules || []));
-        setRemoteRules(true);
+        const rows = await request('/latest');
+        const next = {};
+
+        for (const row of rows || []) {
+          const sensorId = row.sensor_id;
+          if (sensorId) next[sensorId] = row;
+        }
+
+        setLatestEvents(next);
+
+        setSeries((prev) => {
+          const copy = { ...prev };
+          for (const sensor of SENSORS) {
+            const event = next[sensor.id];
+            const value = getEventNumericValue(event);
+            if (typeof value === 'number') {
+              copy[sensor.id] = [{ ts: Date.now(), value }];
+            }
+          }
+          return copy;
+        });
       } catch {
-        setRules(uniqueRules(localRules.load()));  //Backend rule interface is unavailable ->remoteRules==false，enter localStorage mode.
-        setRemoteRules(false);
+        showInfo('Failed to load latest sensor values.');
       }
     };
-    loadRules();
+
+    loadInitialLatest();
   }, []);
 
-  const syncRules = (next, action, payload) => {
+  useEffect(() => {
+    const stored = localRules.load();
+    setRules(uniqueRules(stored));
+  }, []);
+
+  useEffect(() => {
+    const ws = new WebSocket(wsUrl('/ws'));
+
+    ws.onmessage = (e) => {
+      try {
+        const payload = JSON.parse(e.data);
+
+        if (payload?.type === 'snapshot' && Array.isArray(payload.data)) {
+          setLatestEvents((prev) => {
+            const next = { ...prev };
+            for (const row of payload.data) {
+              if (row?.sensor_id) next[row.sensor_id] = row;
+            }
+            return next;
+          });
+
+          setSeries((prev) => {
+            const next = { ...prev };
+            for (const row of payload.data) {
+              if (!row?.sensor_id) continue;
+              const value = getEventNumericValue(row);
+              if (typeof value !== 'number') continue;
+              next[row.sensor_id] = [...(next[row.sensor_id] || []), { ts: Date.now(), value }].slice(-20);
+            }
+            return next;
+          });
+
+          return;
+        }
+
+        const sensorId = payload?.sensor_id;
+        if (!sensorId) return;
+
+        setLatestEvents((prev) => ({ ...prev, [sensorId]: payload }));
+
+        const value = getEventNumericValue(payload);
+        if (typeof value === 'number') {
+          setSeries((prev) => ({
+            ...prev,
+            [sensorId]: [...(prev[sensorId] || []), { ts: Date.now(), value }].slice(-20)
+          }));
+        }
+      } catch {
+        // ignore malformed websocket messages
+      }
+    };
+
+    ws.onerror = () => {
+      showInfo('WebSocket connection failed.');
+    };
+
+    return () => ws.close();
+  }, []);
+
+  const persistRulesLocally = (next) => {
     setRules(next);
-    if (remoteRules) {
-      request('/api/rules/action', { method: 'POST', body: { action, payload } }).catch(() => { });
-    } else {
-      localRules.save(next);
-    }
+    localRules.save(next);
   };
 
   const setActuatorState = async (name, state) => {
     try {
-      await request(`/api/actuators/${name}`, { method: 'POST', body: { state } });
+      await request(`/change-actuator/${encodeURIComponent(name)}/${encodeURIComponent(state)}`, {
+        method: 'POST'
+      });
+
       setActuators((prev) => ({ ...prev, [name]: state }));
     } catch {
       showInfo('Failed to switch actuator state.');
     }
   };
 
-  const submitRule = (e) => {
+  const submitRule = async (e) => {
     e.preventDefault();
+
     const candidate = {
       ...form,
-      id: form.id || crypto.randomUUID(),
-      value: Number(form.value),
+      id: form.id || Date.now(),
+      threshold_value: Number(form.threshold_value),
       enabled: form.enabled !== false
     };
 
-    const peerRules = rules.filter((r) => r.id !== candidate.id);
-    if (peerRules.some((r) => ruleSig(r) === ruleSig(candidate))) {  //Determine rule conflicts
+    const peerRules = rules.filter((r) => String(r.id) !== String(candidate.id));
+
+    if (peerRules.some((r) => ruleSig(r) === ruleSig(candidate))) {
       showInfo('The rule already exists.');
       return;
     }
-    if (peerRules.some((r) => ruleBaseSig(r) === ruleBaseSig(candidate) && r.target_state !== candidate.target_state)) {
+
+    if (
+      peerRules.some(
+        (r) =>
+          ruleBaseSig(r) === ruleBaseSig(candidate) &&
+          r.action_state !== candidate.action_state
+      )
+    ) {
       showInfo('This rule conflicts with the existing regulations.');
       return;
     }
 
-    const next = uniqueRules(canEdit ? rules.map((r) => (r.id === candidate.id ? candidate : r)) : [...rules, candidate]);
-    syncRules(next, canEdit ? 'update' : 'create', candidate);
-    setForm(EMPTY_FORM);
+    try {
+      if (canEdit) {
+        await request('/update-rule', {
+          method: 'PUT',
+          body: {
+            id: candidate.id,
+            sensor_name: candidate.sensor_name,
+            operator: candidate.operator,
+            threshold_value: candidate.threshold_value,
+            actuator_name: candidate.actuator_name,
+            action_state: candidate.action_state
+          }
+        });
+
+        const next = uniqueRules(
+          rules.map((r) => (String(r.id) === String(candidate.id) ? candidate : r))
+        );
+        persistRulesLocally(next);
+      } else {
+        await request('/new-rule', {
+          method: 'POST',
+          body: {
+            sensor_name: candidate.sensor_name,
+            operator: candidate.operator,
+            threshold_value: candidate.threshold_value,
+            actuator_name: candidate.actuator_name,
+            action_state: candidate.action_state
+          }
+        });
+
+        const next = uniqueRules([...rules, candidate]);
+        persistRulesLocally(next);
+      }
+
+      setForm(EMPTY_FORM);
+    } catch {
+      showInfo(canEdit ? 'Failed to update rule.' : 'Failed to create rule.');
+    }
   };
 
-  const editRule = (r) => setForm({ ...r, value: String(r.value) });
+  const editRule = (r) =>
+    setForm({
+      ...r,
+      threshold_value: String(r.threshold_value)
+    });
 
   const toggleRule = (r) => {
     const nextRule = { ...r, enabled: !(r.enabled !== false) };
-    syncRules(rules.map((x) => (x.id === r.id ? nextRule : x)), 'toggle', { id: r.id, enabled: nextRule.enabled });
+    const next = rules.map((x) => (String(x.id) === String(r.id) ? nextRule : x));
+    persistRulesLocally(next);
   };
 
-  const removeRule = (id) => {
-    syncRules(rules.filter((r) => r.id !== id), 'delete', { id });
+  const removeRule = async (id) => {
+    try {
+      await request(`/delete-rule/${id}`, { method: 'DELETE' });
+      persistRulesLocally(rules.filter((r) => String(r.id) !== String(id)));
+    } catch {
+      showInfo('Failed to delete rule.');
+    }
   };
 
   const onDialogConfirm = () => {
-    if (dialog.mode === 'confirm' && dialog.ruleId) removeRule(dialog.ruleId);
+    if (dialog.mode === 'confirm' && dialog.ruleId) {
+      removeRule(dialog.ruleId);
+    }
     closeDialog();
   };
 
@@ -298,15 +449,18 @@ export default function App() {
       {page === 'operations' && (
         <div key="operations" className="page-content">
           <section className="block row-block">
-            <h2>REST Sensors</h2>
+            <h2>Latest Sensors</h2>
             <div className="sensor-grid">
-              {SENSORS.map((s) => (
-                <div className="sensor-card" key={s.id}>
-                  <strong>{s.label}</strong>
-                  <div className="sensor-value">{sensorText(sensors[s.id])}</div>
-                  <small>Status: {sensors[s.id]?.status || '-'}</small>
-                </div>
-              ))}
+              {SENSORS.map((s) => {
+                const event = latestEvents[s.id];
+                return (
+                  <div className="sensor-card" key={s.id}>
+                    <strong>{s.label}</strong>
+                    <div className="sensor-value">{sensorText(event)}</div>
+                    <small>Status: {event ? 'online' : 'waiting'}</small>
+                  </div>
+                );
+              })}
             </div>
           </section>
 
@@ -320,8 +474,18 @@ export default function App() {
                     <strong>{name}</strong>
                     <div className="actuator-actions">
                       <div className={`toggle-switch ${state === 'ON' ? 'on' : 'off'}`}>
-                        <button className={state === 'ON' ? 'selected' : ''} onClick={() => state !== 'ON' && setActuatorState(name, 'ON')}>ON</button>
-                        <button className={state === 'OFF' ? 'selected' : ''} onClick={() => state !== 'OFF' && setActuatorState(name, 'OFF')}>OFF</button>
+                        <button
+                          className={state === 'ON' ? 'selected' : ''}
+                          onClick={() => state !== 'ON' && setActuatorState(name, 'ON')}
+                        >
+                          ON
+                        </button>
+                        <button
+                          className={state === 'OFF' ? 'selected' : ''}
+                          onClick={() => state !== 'OFF' && setActuatorState(name, 'OFF')}
+                        >
+                          OFF
+                        </button>
                       </div>
                     </div>
                   </div>
@@ -334,48 +498,90 @@ export default function App() {
             <h2>Rules</h2>
 
             <form className="rule-form" onSubmit={submitRule}>
-              <label>Sensor Name
+              <label>
+                Sensor Name
                 <select
                   value={form.sensor_name}
-                  onChange={(e) => {
-                    const sensor = SENSORS.find((s) => s.id === e.target.value);
-                    setForm((x) => ({ ...x, sensor_name: e.target.value, unit: sensor?.unit || x.unit }));
-                  }}
+                  onChange={(e) =>
+                    setForm((x) => ({ ...x, sensor_name: e.target.value }))
+                  }
                 >
-                  {SENSORS.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
+                  {SENSORS.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.label}
+                    </option>
+                  ))}
                 </select>
               </label>
 
-              <label>Operator
-                <select value={form.operator} onChange={(e) => setForm((x) => ({ ...x, operator: e.target.value }))}>
-                  {OPERATORS.map((o) => <option key={o} value={o}>{o}</option>)}
+              <label>
+                Operator
+                <select
+                  value={form.operator}
+                  onChange={(e) => setForm((x) => ({ ...x, operator: e.target.value }))}
+                >
+                  {OPERATORS.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
                 </select>
               </label>
 
-              <label>Value
-                <input type="number" value={form.value} onChange={(e) => setForm((x) => ({ ...x, value: e.target.value }))} required />
+              <label>
+                Threshold Value
+                <input
+                  type="number"
+                  value={form.threshold_value}
+                  onChange={(e) =>
+                    setForm((x) => ({ ...x, threshold_value: e.target.value }))
+                  }
+                  required
+                />
               </label>
 
-              <label>Unit
-                <input value={form.unit} onChange={(e) => setForm((x) => ({ ...x, unit: e.target.value }))} />
-              </label>
-
-              <label>Actuator Name
-                <select value={form.actuator_name} onChange={(e) => setForm((x) => ({ ...x, actuator_name: e.target.value }))}>
-                  {ACTUATORS.map((a) => <option key={a} value={a}>{a}</option>)}
+              <label>
+                Actuator Name
+                <select
+                  value={form.actuator_name}
+                  onChange={(e) =>
+                    setForm((x) => ({ ...x, actuator_name: e.target.value }))
+                  }
+                >
+                  {ACTUATORS.map((a) => (
+                    <option key={a} value={a}>
+                      {a}
+                    </option>
+                  ))}
                 </select>
               </label>
 
-              <label>Target State
-                <select value={form.target_state} onChange={(e) => setForm((x) => ({ ...x, target_state: e.target.value }))}>
+              <label>
+                Action State
+                <select
+                  value={form.action_state}
+                  onChange={(e) =>
+                    setForm((x) => ({ ...x, action_state: e.target.value }))
+                  }
+                >
                   <option value="ON">ON</option>
                   <option value="OFF">OFF</option>
                 </select>
               </label>
 
               <div className="rule-actions">
-                <button className="rule-action-btn" type="submit">{canEdit ? 'Update Rule' : 'Create Rule'}</button>
-                {canEdit && <button className="rule-action-btn" type="button" onClick={() => setForm(EMPTY_FORM)}>Cancel</button>}
+                <button className="rule-action-btn" type="submit">
+                  {canEdit ? 'Update Rule' : 'Create Rule'}
+                </button>
+                {canEdit && (
+                  <button
+                    className="rule-action-btn"
+                    type="button"
+                    onClick={() => setForm(EMPTY_FORM)}
+                  >
+                    Cancel
+                  </button>
+                )}
               </div>
             </form>
 
@@ -394,16 +600,23 @@ export default function App() {
                   {rules.map((r) => (
                     <tr key={r.id}>
                       <td>{r.id}</td>
-                      <td>{`IF ${r.sensor_name} ${r.operator} ${r.value} ${r.unit || ''}`}</td>
-                      <td>{`THEN set ${r.actuator_name} to ${r.target_state}`}</td>
+                      <td>{`IF ${r.sensor_name} ${r.operator} ${r.threshold_value}`}</td>
+                      <td>{`THEN set ${r.actuator_name} to ${r.action_state}`}</td>
                       <td>{r.enabled === false ? 'Disabled' : 'Enabled'}</td>
                       <td>
                         <button onClick={() => editRule(r)}>Edit</button>
-                        <button onClick={() => toggleRule(r)}>{r.enabled === false ? 'Enable' : 'Disable'}</button>
+                        <button onClick={() => toggleRule(r)}>
+                          {r.enabled === false ? 'Enable' : 'Disable'}
+                        </button>
                         <button onClick={() => confirmDelete(r.id)}>Delete</button>
                       </td>
                     </tr>
                   ))}
+                  {!rules.length && (
+                    <tr>
+                      <td colSpan="5">No rules available.</td>
+                    </tr>
+                  )}
                 </tbody>
               </table>
             </div>
@@ -416,7 +629,14 @@ export default function App() {
           <section className="block">
             <h2>Telemetry (Stream)</h2>
             <div className="charts-grid">
-              {TOPICS.map((t) => <MiniChart key={t} title={t} unit={TOPIC_UNIT[t]} points={series[t] || []} />)}
+              {SENSORS.map((sensor) => (
+                <MiniChart
+                  key={sensor.id}
+                  title={sensor.label}
+                  unit={sensorMap[sensor.id]?.unit || ''}
+                  points={series[sensor.id] || []}
+                />
+              ))}
             </div>
           </section>
         </div>
@@ -428,8 +648,12 @@ export default function App() {
             <h3>{dialog.mode === 'confirm' ? 'Confirm Action' : 'Notice'}</h3>
             <p>{dialog.message}</p>
             <div className="modal-actions">
-              {dialog.mode === 'confirm' && <button onClick={onDialogConfirm}>Confirm</button>}
-              <button onClick={closeDialog}>{dialog.mode === 'confirm' ? 'Cancel' : 'OK'}</button>
+              {dialog.mode === 'confirm' && (
+                <button onClick={onDialogConfirm}>Confirm</button>
+              )}
+              <button onClick={closeDialog}>
+                {dialog.mode === 'confirm' ? 'Cancel' : 'OK'}
+              </button>
             </div>
           </div>
         </div>
