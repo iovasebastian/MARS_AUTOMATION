@@ -4,14 +4,23 @@ const API_BASE = (import.meta.env.VITE_API_BASE || 'http://localhost:8003').repl
 const RULES_KEY = 'mars-rules-local';
 
 const SENSORS = [
-  { id: 'greenhouse_temperature', label: 'greenhouse_temperature', unit: 'C' },
-  { id: 'entrance_humidity', label: 'entrance_humidity', unit: '%' },
-  { id: 'co2_hall', label: 'co2_hall', unit: 'ppm' },
-  { id: 'hydroponic_ph', label: 'hydroponic_ph', unit: 'pH' },
-  { id: 'water_tank_level', label: 'water_tank_level', unit: '%' },
-  { id: 'corridor_pressure', label: 'corridor_pressure', unit: 'kPa' },
-  { id: 'air_quality_pm25', label: 'air_quality_pm25', unit: 'ug/m3' },
-  { id: 'air_quality_voc', label: 'air_quality_voc', unit: 'ppb' }
+  // ── HTTP-polled sensors ──
+  { id: 'greenhouse_temperature', label: 'Greenhouse Temperature', unit: '°C' },
+  { id: 'entrance_humidity', label: 'Entrance Humidity', unit: '%' },
+  { id: 'co2_hall', label: 'CO₂ Hall', unit: 'ppm' },
+  { id: 'hydroponic_ph', label: 'Hydroponic pH', unit: 'pH' },
+  { id: 'water_tank_level', label: 'Water Tank Level', unit: '%' },
+  { id: 'corridor_pressure', label: 'Corridor Pressure', unit: 'kPa' },
+  { id: 'air_quality_pm25', label: 'Air Quality PM2.5', unit: 'µg/m³' },
+  { id: 'air_quality_voc', label: 'Air Quality VOC', unit: 'ppb' },
+  // ── WebSocket telemetry sensors ──
+  { id: 'solar_array', label: 'Solar Array', unit: 'kW' },
+  { id: 'power_bus', label: 'Power Bus', unit: 'kW' },
+  { id: 'power_consumption', label: 'Power Consumption', unit: 'kW' },
+  { id: 'radiation', label: 'Radiation', unit: '' },
+  { id: 'life_support', label: 'Life Support', unit: '' },
+  { id: 'thermal_loop', label: 'Thermal Loop', unit: '°C' },
+  { id: 'airlock', label: 'Airlock', unit: 'cycles/h' },
 ];
 
 const ACTUATORS = ['cooling_fan', 'entrance_humidifier', 'hall_ventilation', 'habitat_heater'];
@@ -117,9 +126,20 @@ const sensorText = (event) => {
   }
 
   if (Array.isArray(event.measurements)) {
-    return event.measurements
-      .map((m) => `${m.metric}:${m.value}${m.unit ? ` ${m.unit}` : ''}`)
-      .join(' | ');
+    if (event.measurements.length === 1) {
+      const m = event.measurements[0];
+      return `${m.value}${m.unit ? ` ${m.unit}` : ''}`;
+    }
+    return (
+      <ul className="measurement-list">
+        {event.measurements.map((m, i) => (
+          <li key={i}>
+            <span className="metric-name">{m.metric}</span>
+            <span className="metric-value">{m.value}{m.unit ? ` ${m.unit}` : ''}</span>
+          </li>
+        ))}
+      </ul>
+    );
   }
 
   return '-';
@@ -170,10 +190,10 @@ function MiniChart({ title, unit, points }) {
           </g>
         ))}
         <text x="8" y="14" className="meta">
-          min: {min.toFixed(2)} {unit}
+          max: {max.toFixed(2)} {unit}
         </text>
         <text x="8" y={h - 8} className="meta">
-          max: {max.toFixed(2)} {unit}
+          min: {min.toFixed(2)} {unit}
         </text>
       </svg>
     </div>
@@ -377,84 +397,89 @@ export default function App() {
   };
 
   const submitRule = async (e) => {
-    e.preventDefault();
+  e.preventDefault();
 
-    const candidate = {
-      ...form,
-      id: form.id || Date.now(),
-      threshold_value: Number(form.threshold_value),
-      enabled: form.enabled !== false
-    };
-
-    const peerRules = rules.filter((r) => String(r.id) !== String(candidate.id));
-
-    if (peerRules.some((r) => ruleSig(r) === ruleSig(candidate))) {
-      showInfo('The rule already exists.');
-      return;
-    }
-
-    if (
-      peerRules.some(
-        (r) =>
-          ruleBaseSig(r) === ruleBaseSig(candidate) &&
-          r.action_state !== candidate.action_state
-      )
-    ) {
-      showInfo('This rule conflicts with the existing regulations.');
-      return;
-    }
-
-    try {
-      if (canEdit) {
-        await request('/update-rule', {
-          method: 'PUT',
-          body: {
-            id: candidate.id,
-            sensor_name: candidate.sensor_name,
-            operator: candidate.operator,
-            threshold_value: candidate.threshold_value,
-            actuator_name: candidate.actuator_name,
-            action_state: candidate.action_state
-          }
-        });
-
-        const next = uniqueRules(
-          rules.map((r) => (String(r.id) === String(candidate.id) ? candidate : r))
-        );
-        persistRulesLocally(next);
-      } else {
-        await request('/new-rule', {
-          method: 'POST',
-          body: {
-            sensor_name: candidate.sensor_name,
-            operator: candidate.operator,
-            threshold_value: candidate.threshold_value,
-            actuator_name: candidate.actuator_name,
-            action_state: candidate.action_state
-          }
-        });
-
-        const next = uniqueRules([...rules, candidate]);
-        persistRulesLocally(next);
-      }
-
-      setForm(EMPTY_FORM);
-    } catch {
-      showInfo(canEdit ? 'Failed to update rule.' : 'Failed to create rule.');
-    }
+  const candidate = {
+    ...form,
+    threshold_value: Number(form.threshold_value),
+    enabled: form.enabled !== false
   };
+
+  const peerRules = rules.filter((r) =>
+    canEdit ? String(r.id) !== String(form.id) : true
+  );
+
+  if (peerRules.some((r) => ruleSig(r) === ruleSig(candidate))) {
+    showInfo('The rule already exists.');
+    return;
+  }
+
+  if (
+    peerRules.some(
+      (r) =>
+        ruleBaseSig(r) === ruleBaseSig(candidate) &&
+        r.action_state !== candidate.action_state
+    )
+  ) {
+    showInfo('This rule conflicts with the existing regulations.');
+    return;
+  }
+
+  try {
+    if (canEdit) {
+      const updatedRule = {
+        ...candidate,
+        id: form.id
+      };
+
+      await request('/update-rule', {
+        method: 'PUT',
+        body: {
+          id: updatedRule.id,
+          sensor_name: updatedRule.sensor_name,
+          operator: updatedRule.operator,
+          threshold_value: updatedRule.threshold_value,
+          actuator_name: updatedRule.actuator_name,
+          action_state: updatedRule.action_state
+        }
+      });
+
+      const next = uniqueRules(
+        rules.map((r) => (String(r.id) === String(updatedRule.id) ? updatedRule : r))
+      );
+      persistRulesLocally(next);
+    } else {
+      const response = await request('/new-rule', {
+        method: 'POST',
+        body: {
+          sensor_name: candidate.sensor_name,
+          operator: candidate.operator,
+          threshold_value: candidate.threshold_value,
+          actuator_name: candidate.actuator_name,
+          action_state: candidate.action_state
+        }
+      });
+
+      const createdRule = {
+        ...candidate,
+        id: response.id, // or response.rule.id
+      };
+
+      const next = uniqueRules([...rules, createdRule]);
+      persistRulesLocally(next);
+    }
+
+    setForm(EMPTY_FORM);
+  } catch {
+    showInfo(canEdit ? 'Failed to update rule.' : 'Failed to create rule.');
+  }
+};
 
   const editRule = (r) =>
     setForm({
       ...r,
       threshold_value: String(r.threshold_value)
     });
-
-  const toggleRule = (r) => {
-    const nextRule = { ...r, enabled: !(r.enabled !== false) };
-    const next = rules.map((x) => (String(x.id) === String(r.id) ? nextRule : x));
-    persistRulesLocally(next);
-  };
 
   const removeRule = async (id) => {
     try {
@@ -641,7 +666,6 @@ export default function App() {
                     <th>ID</th>
                     <th>Condition</th>
                     <th>Action</th>
-                    <th>Status</th>
                     <th>Operations</th>
                   </tr>
                 </thead>
@@ -651,19 +675,15 @@ export default function App() {
                       <td>{r.id}</td>
                       <td>{`IF ${r.sensor_name} ${r.operator} ${r.threshold_value}`}</td>
                       <td>{`THEN set ${r.actuator_name} to ${r.action_state}`}</td>
-                      <td>{r.enabled === false ? 'Disabled' : 'Enabled'}</td>
                       <td>
                         <button onClick={() => editRule(r)}>Edit</button>
-                        <button onClick={() => toggleRule(r)}>
-                          {r.enabled === false ? 'Enable' : 'Disable'}
-                        </button>
                         <button onClick={() => confirmDelete(r.id)}>Delete</button>
                       </td>
                     </tr>
                   ))}
                   {!rules.length && (
                     <tr>
-                      <td colSpan="5">No rules available.</td>
+                      <td colSpan="4">No rules available.</td>
                     </tr>
                   )}
                 </tbody>
