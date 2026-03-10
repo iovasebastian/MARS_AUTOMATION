@@ -126,9 +126,20 @@ const sensorText = (event) => {
   }
 
   if (Array.isArray(event.measurements)) {
-    return event.measurements
-      .map((m) => `${m.metric}:${m.value}${m.unit ? ` ${m.unit}` : ''}`)
-      .join(' | ');
+    if (event.measurements.length === 1) {
+      const m = event.measurements[0];
+      return `${m.value}${m.unit ? ` ${m.unit}` : ''}`;
+    }
+    return (
+      <ul className="measurement-list">
+        {event.measurements.map((m, i) => (
+          <li key={i}>
+            <span className="metric-name">{m.metric}</span>
+            <span className="metric-value">{m.value}{m.unit ? ` ${m.unit}` : ''}</span>
+          </li>
+        ))}
+      </ul>
+    );
   }
 
   return '-';
@@ -470,12 +481,6 @@ export default function App() {
       threshold_value: String(r.threshold_value)
     });
 
-  const toggleRule = (r) => {
-    const nextRule = { ...r, enabled: !(r.enabled !== false) };
-    const next = rules.map((x) => (String(x.id) === String(r.id) ? nextRule : x));
-    persistRulesLocally(next);
-  };
-
   const removeRule = async (id) => {
     try {
       await request(`/delete-rule/${id}`, { method: 'DELETE' });
@@ -661,7 +666,6 @@ export default function App() {
                     <th>ID</th>
                     <th>Condition</th>
                     <th>Action</th>
-                    <th>Status</th>
                     <th>Operations</th>
                   </tr>
                 </thead>
@@ -671,19 +675,15 @@ export default function App() {
                       <td>{r.id}</td>
                       <td>{`IF ${r.sensor_name} ${r.operator} ${r.threshold_value}`}</td>
                       <td>{`THEN set ${r.actuator_name} to ${r.action_state}`}</td>
-                      <td>{r.enabled === false ? 'Disabled' : 'Enabled'}</td>
                       <td>
                         <button onClick={() => editRule(r)}>Edit</button>
-                        <button onClick={() => toggleRule(r)}>
-                          {r.enabled === false ? 'Enable' : 'Disable'}
-                        </button>
                         <button onClick={() => confirmDelete(r.id)}>Delete</button>
                       </td>
                     </tr>
                   ))}
                   {!rules.length && (
                     <tr>
-                      <td colSpan="5">No rules available.</td>
+                      <td colSpan="4">No rules available.</td>
                     </tr>
                   )}
                 </tbody>
